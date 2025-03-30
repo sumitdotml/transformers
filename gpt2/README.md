@@ -49,6 +49,10 @@ graph TD
     style I fill:#f9f,stroke:#333,stroke-width:2px
     style L fill:#f9f,stroke:#333,stroke-width:2px
 ```
+<div style="text-align: center;">
+    <img src="./architecture-ss-from-raschka.png" alt="Architecture Diagram from Raschka's 'LLM from Scratch' book" style="width: 70%; height: auto;">
+    <p style="text-align: center;">Architecture Diagram from Raschka's 'LLM from Scratch' book</p>
+</div>
 
 ### Step-by-Step Implementation Guide:
 
