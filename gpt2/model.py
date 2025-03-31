@@ -209,26 +209,6 @@ class TransformerBlock(nn.Module):
 
 # -- GPT2 Model
 class GPT2(nn.Module):
-    """
-    GPT2 class.
-
-    Order of operations:
-    1. Token embeddings
-    2. Positional encodings
-    3. Dropout
-    4. LayerNorm1
-    5. Masked Multi-Head Attention
-    6. Dropout
-    (create a residual connection [result of 3] + [result of 5])
-    7. LayerNorm2
-    8. FeedForward
-    9. Dropout
-    (create a residual connection [result of 6] + [result of 9])
-    10. Final LayerNorm
-    11. Linear Output Projection layer
-    12. Output logits [with the shape of (batch_size, seq_len, vocab_size)]
-    """
-
     def __init__(self, config: dict):
         super().__init__()
         self.token_embed = nn.Embedding(
