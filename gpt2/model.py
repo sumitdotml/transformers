@@ -38,8 +38,8 @@ config = {
 
 def embedder_function(x):
     embedder = nn.Embedding(
-        num_embeddings=config.vocab_size,  # 50257
-        embedding_dim=config.n_embd,  # 768
+        num_embeddings=config["vocab_size"],  # 50257
+        embedding_dim=config["n_embd"],  # 768
     )
     return embedder(x)
 
@@ -123,13 +123,15 @@ class MultiHeadAttention(nn.Module):
 
 if __name__ == "__main__":
     mha = MultiHeadAttention(
-        d_in=config.n_embd,
-        d_out=config.n_embd,
-        dropout=config.attn_pdrop,
-        context_length=config.n_positions,
-        n_head=config.n_head,
+        d_in=config["n_embd"],
+        d_out=config["n_embd"],
+        dropout=config["attn_pdrop"],
+        context_length=config["n_positions"],
+        n_head=config["n_head"],
     )
+    print(mha)
 
     encoded_embedding = embedder_function(input_tensor)
+    print(mha(encoded_embedding))
     print(f"encoded_embedding.shape: {encoded_embedding.shape}")
     print(f"shape of mha(encoded_embedding): {mha(encoded_embedding).shape}")
