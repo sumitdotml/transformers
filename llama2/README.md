@@ -178,8 +178,9 @@ Use the same `d=4`, `base=4`, $θ_0$, $θ_1$ as in Exercise 4.
 
 Frequency $θ_0$:
 
-j=0, d=2, base=100
-$θ_0 = base ^ (-2j / d) = 100 ^ (-2*0 / 2) = 100 ^ 0 = 1$.
+$j=0$, $d=2$, $base=100$
+
+$θ_0 = base ^ {(-2j / d)} = 100 ^ {(-2*0 / 2)} = 100 ^ 0 = 1$.
 
 Rotation Angle $α$:
 
@@ -187,14 +188,16 @@ $α = m * θ_0 = 1 * 1 = 1$ (radian).
 
 Rotated Query $q'_m$:
 
-Original pair [x, y] = [3, 4].
+Original pair $[x, y] = [3, 4]$.
 
 Angle $α = 1$.
 
 $x' = x * cos(α) - y * sin(α) = 3 * cos(1) - 4 * sin(1)$
 $y' = x * sin(α) + y * cos(α) = 3 * sin(1) + 4 * cos(1)$
 
-So, $q'_m = \begin{bmatrix} 3 * cos(1) - 4 * sin(1) \\ 3 * sin(1) + 4 * cos(1) \end{bmatrix}$
+So,
+
+$$q'_m = \begin{bmatrix} 3 * cos(1) - 4 * sin(1) \\ 3 * sin(1) + 4 * cos(1) \end{bmatrix}$$
 
 <u>**Exercise 2: Rotation and Dot Product (Two Vectors, d=2)**</u>
 
@@ -209,7 +212,8 @@ Rotated Query $q'_m$:
 Original q = [1, 0]. Angle $α_q = π/2$.
 $x' = 1 * cos(π/2) - 0 * sin(π/2) = 1 * 0 - 0 * 1 = 0.$
 $y' = 1 * sin(π/2) + 0 * cos(π/2) = 1 * 1 + 0 * 0 = 1.$
-$q'_m = \begin{bmatrix} 0 \\ 1 \end{bmatrix}$.
+
+$$q'_m = \begin{bmatrix} 0 \\ 1 \end{bmatrix}$$
 
 This corresponds to $[cos(π/2), sin(π/2)]$ because the input was $[1,0]$, like rotating the x-axis unit vector.
 
@@ -218,13 +222,16 @@ Rotated Key $k'_n$:
 Original k = [0, 2]. Angle $α_k = π$.
 $x' = 0 * cos(π) - 2 * sin(π) = 0 * (-1) - 2 * 0 = 0.$
 $y' = 0 * sin(π) + 2 * cos(π) = 0 * 0 + 2 * (-1) = -2.$
-$k'_n = \begin{bmatrix} 0 \\ -2 \end{bmatrix}$.
 
-Alternatively, $[-2sin(π), 2cos(π)] = [-2 * 0, 2 * (-1)] = [0, -2]$ is also a valid way to think about rotating [0, 2] which is $2 * \begin{bmatrix} 0 \\ 1 \end{bmatrix}$.
+$$k'_n = \begin{bmatrix} 0 \\ -2 \end{bmatrix}$$
+
+Alternatively, $[-2sin(π), 2cos(π)] = [-2 * 0, 2 * (-1)] = [0, -2]$ is also a valid way to think about rotating [0, 2] which is:
+
+$$2 * \begin{bmatrix} 0 \\ 1 \end{bmatrix}$$
 
 Dot Product:
 
-$(q'_m)^T (k'_n) = \begin{bmatrix} 0 \\ 1 \end{bmatrix} \cdot \begin{bmatrix} 0 \\ -2 \end{bmatrix} = (0 * 0) + (1 * -2) = 0 - 2 = -2$.
+$$(q'_m)^T (k'_n) = \begin{bmatrix} 0 \\ 1 \end{bmatrix} \cdot \begin{bmatrix} 0 \\ -2 \end{bmatrix} = (0 * 0) + (1 * -2) = 0 - 2 = -2.$$
 
 
 
