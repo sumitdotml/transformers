@@ -95,6 +95,7 @@ Note: Conjugate of a complex number $a + bi$ is $a - bi$.
 - Calculate the rotation angle $α = m * θ_0$.
 - Calculate the rotated query vector $q'_m$. (Assume $cos(1) ≈ 0.54$, $sin(1) ≈ 0.84$ if you need numerical values, or leave as $cos(1)$, $sin(1)$).
 
+
 **Exercise 2: Rotation and Dot Product (Two Vectors, d=2)**
 
 **Setup**:
@@ -116,11 +117,11 @@ Note: Conjugate of a complex number $a + bi$ is $a - bi$.
 
 **Setup**:
 
-Use the same `d=2`, `base=100`, `θ_0=1`, `q=[1, 0]`, `k=[0, 2]` as in Exercise 2.
+Use the same `d=2`, `base=100`, $θ_0=1$, `q=[1, 0]`, `k=[0, 2]` as in Exercise 2.
 
-In Exercise 2, `m = π/2`, `n = π`, so the relative position `m - n = -π/2`.
+In Exercise 2, $m = π/2$, $n = π$, so the relative position $m - n = -π/2$.
 
-Now, choose new positions `m' = 0` and `n' = π/2`. Note that `m' - n' = -π/2`, the same relative position.
+Now, choose new positions $m' = 0$ and $n' = π/2$. Note that $m' - n' = -π/2$, the same relative position.
 
 **Tasks**:
 
@@ -167,6 +168,65 @@ Use the same `d=4`, `base=4`, $θ_0$, $θ_1$ as in Exercise 4.
 - Form the full rotated key vector $k'_n = [k'_0, k'_1, k'_2, k'_3]$.
 - Retrieve the rotated query $q'_m$ from Exercise 4.
 - Calculate the final dot product $(q'_m)^T (k'_n) = q'_0*k'_0 + q'_1*k'_1 + q'_2*k'_2 + q'_3*k'_3$.
+
+</details>
+
+<details>
+<summary>Answers</summary>
+
+<u>**Exercise 1: Simple Rotation (Single Vector)**</u>
+
+Frequency $θ_0$:
+
+j=0, d=2, base=100
+$θ_0 = base ^ (-2j / d) = 100 ^ (-2*0 / 2) = 100 ^ 0 = 1$.
+
+Rotation Angle $α$:
+
+$α = m * θ_0 = 1 * 1 = 1$ (radian).
+
+Rotated Query $q'_m$:
+
+Original pair [x, y] = [3, 4].
+
+Angle $α = 1$.
+
+$x' = x * cos(α) - y * sin(α) = 3 * cos(1) - 4 * sin(1)$
+$y' = x * sin(α) + y * cos(α) = 3 * sin(1) + 4 * cos(1)$
+
+So, $q'_m = \begin{bmatrix} 3 * cos(1) - 4 * sin(1) \\ 3 * sin(1) + 4 * cos(1) \end{bmatrix}$
+
+<u>**Exercise 2: Rotation and Dot Product (Two Vectors, d=2)**</u>
+
+Rotation Angles:
+
+$θ_0$ = 1 (from Ex 1 setup reuse).
+$α_q = m * θ_0 = (π/2) * 1 = π/2$.
+$α_k = n * θ_0 = π * 1 = π$.
+
+Rotated Query $q'_m$:
+
+Original q = [1, 0]. Angle $α_q = π/2$.
+$x' = 1 * cos(π/2) - 0 * sin(π/2) = 1 * 0 - 0 * 1 = 0.$
+$y' = 1 * sin(π/2) + 0 * cos(π/2) = 1 * 1 + 0 * 0 = 1.$
+$q'_m = \begin{bmatrix} 0 \\ 1 \end{bmatrix}$.
+
+This corresponds to $[cos(π/2), sin(π/2)]$ because the input was $[1,0]$, like rotating the x-axis unit vector.
+
+Rotated Key $k'_n$:
+
+Original k = [0, 2]. Angle $α_k = π$.
+$x' = 0 * cos(π) - 2 * sin(π) = 0 * (-1) - 2 * 0 = 0.$
+$y' = 0 * sin(π) + 2 * cos(π) = 0 * 0 + 2 * (-1) = -2.$
+$k'_n = \begin{bmatrix} 0 \\ -2 \end{bmatrix}$.
+
+Alternatively, $[-2sin(π), 2cos(π)] = [-2 * 0, 2 * (-1)] = [0, -2]$ is also a valid way to think about rotating [0, 2] which is $2 * \begin{bmatrix} 0 \\ 1 \end{bmatrix}$.
+
+Dot Product:
+
+$(q'_m)^T (k'_n) = \begin{bmatrix} 0 \\ 1 \end{bmatrix} \cdot \begin{bmatrix} 0 \\ -2 \end{bmatrix} = (0 * 0) + (1 * -2) = 0 - 2 = -2$.
+
+
 
 </details>
 
