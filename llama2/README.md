@@ -3,7 +3,7 @@
 My attempt at implementing LLaMA2.
 
 ## ToC
-
+- [Flow](./flow.md)
 - [Key Formulas and Concepts](#Key-Formulas-and-Concepts)
   - [Rotary Position Embeddings (RoPE)](#RoPE)
   - [RoPE Exercises](#RoPE-Exercises)
@@ -11,6 +11,11 @@ My attempt at implementing LLaMA2.
   - [Blogs](#Blogs)
   - [Papers](#Papers)
   - [Repos](#Repos)
+
+
+<img src="ss-from-umar-jamil.png" alt="Architecture by Umar Jamil" width="500" />
+
+Screenshot from [Umar Jamil's video](https://youtu.be/Mn_9W1nCFLo?si=V32nIRxm11vciUbt&t=145)
 
 
 ## Key Formulas and Concepts <a name="Key-Formulas-and-Concepts"></a>
@@ -77,8 +82,44 @@ The total dot product is the sum over all pairs `j`.
 
 Note: Conjugate of a complex number $a + bi$ is $a - bi$.
 
+#
+
+#### Recap: RoPE Formulas
+
+_Goal_: Modify Query `q_m` (at position `m`) and Key `k_n` (at position `n`) into `q'_m` and `k'_n` such that their dot product $(q'_m)^T (k'_n)$ depends only on the original `q_m`, `k_n`, and the relative position `m-n`.
+
+_Method_: Divide the embedding dimension `d` into `d/2` pairs. Rotate each pair `j` (dimensions `2j` and `2j+1`) by an angle that depends on the position and the pair index.
+
+_Frequency_ $θ_j$: For pair `j` (where `j` goes from $0$ to $d/2 - 1$), the base frequency is $θ_j = base ^ {(-2j / d)}$. A common base is `10000`.
+
+_Rotation Angle_: For a vector at position `p` (where `p` is `m` or `n`), the rotation angle for pair `j` is $α = p * θ_j$.
+
+_Rotation of a Pair_: Given a pair $[x, y]$ (representing dimensions $2j$ and $2j+1$), the rotated pair $[x', y']$ is:
+
+$$
+x' = x * cos(α) - y * sin(α)
+$$
+$$
+y' = x * sin(α) + y * cos(α)
+$$
+
+Or using the matrix:
+
+$$
+\begin{bmatrix}
+    cos(α) & -sin(α) \\
+    sin(α) & cos(α)
+\end{bmatrix} * \begin{bmatrix} x \\ y \end{bmatrix}
+$$
+
+_Dot Product Property (for verification)_: The dot product contribution from pair `j` is $Re[ (q_{2j} + i q_{2j+1}) * conjugate(k_{2j} + i k_{2j+1}) * e^(i (m-n) θ_j) ]$. The total dot product is the sum over all pairs `j`.
+
+#
+
 <details>
-<summary><a name="RoPE-Exercises"></a>RoPE Exercises</summary>
+<summary>RoPE Exercises for Intuition</summary>
+
+<br />
 
 **Exercise 1: Simple Rotation (Single Vector)**
 
@@ -173,6 +214,8 @@ Use the same `d=4`, `base=4`, $θ_0$, $θ_1$ as in Exercise 4.
 
 <details>
 <summary>Answers</summary>
+
+<br />
 
 <u>**Exercise 1: Simple Rotation (Single Vector)**</u>
 
