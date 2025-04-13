@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional, List, Union
 import torch
 import torch.nn as nn
 from config import CONFIG
@@ -7,9 +7,9 @@ from config import CONFIG
 class RoPE(nn.Module):
     def __init__(
         self,
-        d_model=CONFIG["hidden_size"],
-        max_seq_len=CONFIG.get("max_seq_len", 2048),
-        base=CONFIG.get("rope_base", 10000),
+        d_model: int,
+        max_seq_len: int,
+        base: float,
     ):
         """
         Initializes the RoPE module.
@@ -72,72 +72,112 @@ class RoPE(nn.Module):
         return cos_cached, sin_cached
 
     @staticmethod
+    def rotate_half(x):
+        """Rotates half the hidden dims of the input."""
+        # Example input shape: (batch, seq_len, heads, dim) or (batch, seq_len, dim)
+        # Rotate on the last dimension (dim)
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    @staticmethod
     def apply_rope(
-        x: torch.Tensor, cos_values: torch.Tensor, sin_values: torch.Tensor
+        x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
     ) -> torch.Tensor:
         """
-        Applies the RoPE rotation to the input tensor using precomputed cos/sin values.
+        Applies the RoPE rotation using the original algorithm.
 
         Args:
-            x (torch.Tensor): Input tensor, shape (..., d_model).
-            cos (torch.Tensor): Precomputed cosine values for the position, shape (d,).
-            sin (torch.Tensor): Precomputed sine values for the position, shape (d,).
+            x (torch.Tensor): Input tensor, e.g., shape (batch, seq_len, dim) or (batch, heads, seq_len, dim).
+                              RoPE is applied to the last dimension.
+            cos (torch.Tensor): Precomputed cosine values, broadcastable to x.
+                                E.g., shape (seq_len, dim/2) -> unsqueezed to (1, seq_len, 1, ..., 1, dim/2) for 4D x.
+            sin (torch.Tensor): Precomputed sine values, same shape as cos.
 
         Returns:
-            torch.Tensor: Rotated tensor, shape (..., d_model).
+            torch.Tensor: Rotated tensor, same shape as x.
         """
-        # Splitting x into even and odd parts along the last dimension
-        x_even = x[..., 0::2]  # Shape: (..., d)
-        x_odd = x[..., 1::2]  # Shape: (..., d)
+        # cos/sin inputs have shape (seq_len, d_half)
+        # We need to unsqueeze them to broadcast correctly with x
+        # x typically has shape (batch, seq_len, ...) e.g. (batch, seq_len, dim) or (batch, seq_len, heads, dim)
+        # We want cos/sin to broadcast along all dims except seq_len (dim 1) and the feature dim (last dim)
+        # Target shape for cos/sin (before cat): (1, seq_len, 1, ..., 1, d_half)
 
-        # Applying rotation using RoPE formulas
-        # cos and sin have shape (d,), they will broadcast correctly against x_even/x_odd
-        # x'_even = x_even * cos - x_odd * sin
-        # x'_odd = x_even * sin + x_odd * cos
-        x_rotated_even = x_even * cos_values - x_odd * sin_values
-        x_rotated_odd = x_even * sin_values + x_odd * cos_values
+        # Adding a singleton dim for batch
+        cos = cos.unsqueeze(0)
+        sin = sin.unsqueeze(0)
 
-        # Combining back into a single tensor
-        x_rotated = torch.empty_like(x)  # Use empty_like for potential efficiency
+        # Adding singleton dims for any dimensions between seq_len and the final feature dim
+        # Example: x=(b, s, h, d), ndim=4. Need cos=(1, s, 1, d_half).
+        # cos starts as (s, d_half). After unsqueeze(0) -> (1, s, d_half).
+        # Need to add ndim - 3 = 4 - 3 = 1 singleton dim before d_half.
+        # Example: x=(b, s, d), ndim=3. Need cos=(1, s, d_half).
+        # cos starts as (s, d_half). After unsqueeze(0) -> (1, s, d_half).
+        # Need to add ndim - 3 = 3 - 3 = 0 singleton dims.
+        if x.ndim > 3:
+            num_intermediate_dims = x.ndim - 3
+            for _ in range(num_intermediate_dims):
+                cos = cos.unsqueeze(-2)  # Add dim before the last one (d_half)
+                sin = sin.unsqueeze(-2)
+
+        # Using the standard RoPE implementation method directly
+        # Splitting the input tensor into even and odd dimensions along the last dimension
+        x_even = x[..., 0::2]  # Shape: (batch, seq_len, ..., d/2)
+        x_odd = x[..., 1::2]  # Shape: (batch, seq_len, ..., d/2)
+
+        # Applying rotation to even and odd dimensions separately
+        # The broadcast of cos/sin already handles the sequence dimension correct alignment
+        x_rotated_even = x_even * cos - x_odd * sin
+        x_rotated_odd = x_even * sin + x_odd * cos
+
+        # Interleaving (i.e., merging) the dimensions again
+        x_rotated = torch.empty_like(x)
         x_rotated[..., 0::2] = x_rotated_even
         x_rotated[..., 1::2] = x_rotated_odd
 
         return x_rotated
 
-    def forward(self, x: torch.Tensor, position_index: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
         """
-        Forward pass applying RoPE.
+        Forward pass applying RoPE across the sequence dimension.
 
         Args:
-            x (torch.Tensor): Input tensor, shape (Batch, SeqLen, ..., Dim) or (..., Dim).
-                              The last dimension must be self.d_model.
-            position_index (int): The absolute position index in the sequence.
-                                  Must be less than max_seq_len.
+            x (torch.Tensor): Input tensor, shape (Batch, SeqLen, ..., Dim).
+                              The last dimension must be self.d_model. RoPE is applied
+                              positionally along the SeqLen dimension.
+
+            offset (int): The starting absolute position index for the sequence `x`.
+                          Defaults to 0 (for processing prompts or full sequences).
+                          Used during generation with KV caching.
 
         Returns:
             torch.Tensor: Output tensor with RoPE applied, same shape as x.
         """
-        # Ensuring position_index is within bounds
-        if not (0 <= position_index < self.max_seq_len):
+        # Assuming x has shape like (batch_size, seq_len, ...) or (batch_size, seq_len, num_heads, dim)
+        seq_len = x.shape[1]
+
+        # Ensuring sequence length (with offset) is within bounds
+        if not (0 <= offset and offset + seq_len <= self.max_seq_len):
             raise ValueError(
-                f"Position index {position_index} is out of bounds for "
+                f"Request absolute positions [{offset}:{offset + seq_len}] (i.e., "
+                f"sequence length {seq_len}) + offset {offset} are out of bounds for "
                 f"max_seq_len {self.max_seq_len}"
             )
 
         # Ensuring cache tensors are on the same device as input x
-        # Moving cache to device on first forward call or if device changes
         if self.cos_cached.device != x.device:
             self.cos_cached = self.cos_cached.to(x.device)
             self.sin_cached = self.sin_cached.to(x.device)
 
-        # Getting the precomputed cos and sin values for the given position index
-        # cos_cached shape: (max_seq_len, d), sin_cached shape: (max_seq_len, d)
-        # We need the slice for the specific position_index
-        cos_cached = self.cos_cached[position_index]  # Shape: (d,)
-        sin_cached = self.sin_cached[position_index]  # Shape: (d,)
+        # Getting the precomputed cos and sin values for the sequence length
+        # cos_cached/sin_cached shape: (max_seq_len, d/2)
+        # Slicing for the actual sequence length
+        cos_values = self.cos_cached[offset : offset + seq_len]  # Shape: (seq_len, d/2)
+        sin_values = self.sin_cached[offset : offset + seq_len]  # Shape: (seq_len, d/2)
 
         # Applying RoPE using the static helper method
-        return self.apply_rope(x, cos_cached, sin_cached)
+        # The apply_rope method handles broadcasting cos/sin to match x's dimensions
+        return self.apply_rope(x, cos_values, sin_values)
 
 
 #######################################
@@ -149,112 +189,224 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     d_model = config["hidden_size"]
     max_seq_len = config["max_position_embeddings"]
+    base = config["rope_theta"]
 
     # Instantiate RoPE
     try:
-        rope = RoPE(d_model=d_model, max_seq_len=max_seq_len)
+        rope = RoPE(d_model=d_model, max_seq_len=max_seq_len, base=base)
         print(f"Initialized RoPE with d_model={d_model}, max_seq_len={max_seq_len}")
         print(f"Cache shape: cos={rope.cos_cached.shape}, sin={rope.sin_cached.shape}")
     except Exception as e:
         print(f"Error initializing RoPE: {e}")
         exit()
 
-    # Test Case 1: Single vector
-    print("\n--- Test Case 1: Single Vector ---")
-    x_single = torch.randn(1, d_model)  # Shape (Batch=1, Dim=d_model)
-    position_index = 5  # Example position
-    print(f"Input shape: {x_single.shape}, Position: {position_index}")
-    try:
-        x_rotated_single = rope(x_single, position_index)
-        print(f"Output shape: {x_rotated_single.shape}")
-        # print("Input (first 10):", x_single[0, :10])
-        # print("Output (first 10):", x_rotated_single[0, :10])
-    except Exception as e:
-        print(f"Error during forward pass: {e}")
-
-    # Test Case 2: Check position 0 (should be near identity)
-    print("\n--- Test Case 2: Position 0 (Identity Check) ---")
-    position_index_zero = 0
-    try:
-        x_rotated_pos0 = rope(x_single, position_index_zero)
-        difference = torch.sum(torch.abs(x_single - x_rotated_pos0)).item()
-        print(f"Applying RoPE at position {position_index_zero}")
-        print(
-            f"Sum of absolute difference between input and RoPE(pos=0): {difference:.4e}"
-        )  # Should be close to 0
-        assert torch.allclose(
-            x_single, x_rotated_pos0, atol=1e-6
-        ), "RoPE at pos 0 should be close to identity"
-        print("Assertion Passed: RoPE at pos 0 is close to identity.")
-    except Exception as e:
-        print(f"Error during position 0 check: {e}")
-
-    # Test Case 3: Sequence of vectors
-    print("\n--- Test Case 3: Sequence Processing ---")
+    # Test Case 1: Sequence Processing (Main test)
+    print("\n--- Test Case 1: Sequence Processing ---")
     seq_len = 10
     batch_size = 2
     x_seq = torch.randn(batch_size, seq_len, d_model)
     print(f"Input sequence shape: {x_seq.shape}")
-    rotated_seq = torch.zeros_like(x_seq)
     try:
-        for i in range(seq_len):
-            # Apply RoPE position by position
-            # Input to rope: (batch_size, d_model)
-            rotated_seq[:, i, :] = rope(x_seq[:, i, :], i)
+        rotated_seq = rope(x_seq)  # Apply RoPE across the sequence
         print(f"Rotated sequence shape: {rotated_seq.shape}")
+
+        # Verification: Apply RoPE manually position by position and compare
+        rotated_manual = torch.zeros_like(x_seq)
+        rope_single_pos = RoPE(
+            d_model=d_model, max_seq_len=max_seq_len, base=base
+        )  # Use original implementation for single pos check
+
+        # Need the *original* apply_rope and forward that took position_index
+        # Let's redefine it here locally for the test comparison
+        @staticmethod
+        def apply_rope_single_pos(
+            x_pos: torch.Tensor, cos_pos: torch.Tensor, sin_pos: torch.Tensor
+        ) -> torch.Tensor:
+            x_even = x_pos[..., 0::2]
+            x_odd = x_pos[..., 1::2]
+            x_rotated_even = x_even * cos_pos - x_odd * sin_pos
+            x_rotated_odd = x_even * sin_pos + x_odd * cos_pos
+            x_rotated = torch.empty_like(x_pos)
+            x_rotated[..., 0::2] = x_rotated_even
+            x_rotated[..., 1::2] = x_rotated_odd
+            return x_rotated
+
+        cos_cache_test = rope_single_pos.cos_cached.to(x_seq.device)
+        sin_cache_test = rope_single_pos.sin_cached.to(x_seq.device)
+
+        # Since we are now using offset=0 as default in the forward method
+        offset = 0  # Match the default in the forward method
+        for i in range(seq_len):
+            pos_i = (
+                offset + i
+            )  # Calculate position using offset (consistent with KV caching)
+            cos_pos_i = cos_cache_test[pos_i]  # Shape (d/2,)
+            sin_pos_i = sin_cache_test[pos_i]  # Shape (d/2,)
+            rotated_manual[:, i, :] = apply_rope_single_pos(
+                x_seq[:, i, :], cos_pos_i, sin_pos_i
+            )
+
+        difference = torch.sum(torch.abs(rotated_seq - rotated_manual)).item()
+        print(
+            f"Sum of absolute difference between batch RoPE and manual RoPE: {difference:.4e}"
+        )
+        assert torch.allclose(
+            rotated_seq, rotated_manual, atol=1e-5
+        ), "Batch RoPE output does not match manual RoPE."
+        print("Assertion Passed: Batch RoPE matches manual RoPE.")
+
+        # Print shapes to debug
+        print(f"Testing shapes - x[0,0,:10]: {x_seq[0,0,:10].shape}")
+        print(f"Single position cos shape: {cos_cache_test[0].shape}")
+        print(f"Position range used: {offset} to {offset+seq_len-1}")
+
     except Exception as e:
         print(f"Error processing sequence: {e}")
+        import traceback
 
-    # Test Case 4: Input with multiple leading dimensions (e.g., including heads)
-    # RoPE should work regardless of leading dimensions as it acts on the last one.
-    print("\n--- Test Case 4: Multi-dimensional Input (e.g., with Heads) ---")
+        traceback.print_exc()
+
+    # Test Case 2: First Token Behavior (At position 0)
+    print("\n--- Test Case 2: First Token Behavior (At position 0) ---")
+    try:
+        first_token_input = x_seq[:, 0:1, :]  # Shape (batch, 1, dim)
+        first_token_rotated = rope(first_token_input)  # Apply RoPE to seq length 1
+        difference_pos0 = torch.sum(
+            torch.abs(first_token_input - first_token_rotated)
+        ).item()
+
+        # With offset=0 (default), a sequence of length 1 should use position 0
+        # Which should be close to identity operation
+        print(f"Applying RoPE to sequence of length 1 (position 0, default offset)")
+        print(f"Sum of difference between input and output: {difference_pos0:.4e}")
+
+        # Verify with manual application to the correct position
+        actual_pos = 0  # Match default offset
+        first_token_manual = apply_rope_single_pos(
+            first_token_input.squeeze(1),  # Remove seq_len dimension for single token
+            cos_cache_test[actual_pos],
+            sin_cache_test[actual_pos],
+        )
+
+        # Compare batch implementation with manual application
+        manual_diff = torch.sum(
+            torch.abs(first_token_rotated.squeeze(1) - first_token_manual)
+        ).item()
+        print(f"Difference between batch and manual application: {manual_diff:.4e}")
+        assert torch.allclose(
+            first_token_rotated.squeeze(1), first_token_manual, atol=1e-5
+        ), "First token rotation doesn't match expected"
+        print("Assertion Passed: First token rotation is correct at position 0.")
+
+        # Also verify identity property at position 0
+        assert torch.allclose(
+            first_token_input.squeeze(1), first_token_rotated.squeeze(1), atol=1e-6
+        ), "RoPE at pos 0 should be close to identity"
+        print("Assertion Passed: RoPE at pos 0 is close to identity.")
+    except Exception as e:
+        print(f"Error during position 0 check: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+    # Test Case 3: Multi-dimensional Input (e.g., with Heads)
+    print("\n--- Test Case 3: Multi-dimensional Input (e.g., with Heads) ---")
     num_heads = 4
-    # Assuming RoPE is applied on the full dimension before/after head splitting/merging
-    x_multi_dim = torch.randn(batch_size, seq_len, num_heads, d_model)
-    print(f"Input shape: {x_multi_dim.shape}")
-    rotated_multi_dim = torch.zeros_like(x_multi_dim)
+    head_dim = d_model // num_heads  # Assuming d_model is divisible by num_heads
+    # Reshape x_seq to simulate head dimension: (batch, seq_len, num_heads, head_dim)
+    # NOTE: This assumes RoPE is applied *after* splitting into heads.
+    # If RoPE is applied *before* splitting, the input shape would be (batch, seq_len, d_model) as in Case 1.
+    # Let's test the case where RoPE is applied *per head* on head_dim
+    # We need a RoPE instance for head_dim
+    rope_per_head = RoPE(d_model=head_dim, max_seq_len=max_seq_len, base=base)
+    x_multi_dim = torch.randn(batch_size, seq_len, num_heads, head_dim)
+    print(f"Input shape (per-head RoPE): {x_multi_dim.shape}")
     try:
-        for i in range(seq_len):
-            # Apply RoPE position by position to the last dimension
-            # Input to rope: (batch_size, num_heads, d_model)
-            rotated_multi_dim[:, i, :, :] = rope(x_multi_dim[:, i, :, :], i)
+        # Apply RoPE across seq_len, acting on the last dim (head_dim)
+        rotated_multi_dim = rope_per_head(x_multi_dim)
         print(f"Rotated output shape: {rotated_multi_dim.shape}")
+        print(f"Successfully applied RoPE to multi-dimensional input.")
+        # Add verification similar to Test Case 1 if needed
     except Exception as e:
-        print(f"Error processing multi-dimensional input: {e}")
+        print(f"Error processing multi-dimensional input (per-head): {e}")
+        import traceback
 
-    # Test Case 5: Boundary Checks
-    print("\n--- Test Case 5: Boundary Checks ---")
+        traceback.print_exc()
+
+    # Test Case 4: Boundary Checks (Sequence Length)
+    print("\n--- Test Case 4: Boundary Checks (Sequence Length) ---")
     try:
-        # Test max valid position index
-        max_pos = max_seq_len - 1
-        print(f"Testing max position index: {max_pos}")
-        _ = rope(x_single, max_pos)
-        print("Max position index test successful.")
+        # Test max valid sequence length
+        print(f"Testing max sequence length: {max_seq_len}")
+        x_max_seq = torch.randn(batch_size, max_seq_len, d_model)
+        _ = rope(x_max_seq)
+        print("Max sequence length test successful.")
     except Exception as e:
-        print(f"Error testing max position index: {e}")
+        print(f"Error testing max sequence length: {e}")
 
     try:
-        # Test invalid position index (too high)
-        invalid_pos = max_seq_len
-        print(f"Testing invalid position index: {invalid_pos}")
-        _ = rope(x_single, invalid_pos)
+        # Test invalid sequence length (too high)
+        invalid_seq_len = max_seq_len + 1
+        print(f"Testing invalid sequence length: {invalid_seq_len}")
+        x_invalid_seq = torch.randn(batch_size, invalid_seq_len, d_model)
+        _ = rope(x_invalid_seq)
         print(
-            "ERROR: Should have raised ValueError for out-of-bounds index."
+            "ERROR: Should have raised ValueError for out-of-bounds sequence length."
         )  # Should not reach here
     except ValueError as e:
-        print(f"Successfully caught expected error for index {invalid_pos}: {e}")
+        print(f"Successfully caught expected error for seq_len {invalid_seq_len}: {e}")
     except Exception as e:
-        print(f"Caught unexpected error for index {invalid_pos}: {e}")
+        print(f"Caught unexpected error for seq_len {invalid_seq_len}: {e}")
 
     try:
-        # Test invalid position index (negative)
-        invalid_pos_neg = -1
-        print(f"Testing invalid position index: {invalid_pos_neg}")
-        _ = rope(x_single, invalid_pos_neg)
+        # Test invalid sequence length (zero)
+        invalid_seq_len_zero = 0
+        print(f"Testing invalid sequence length: {invalid_seq_len_zero}")
+        x_invalid_seq_zero = torch.randn(batch_size, invalid_seq_len_zero, d_model)
+        _ = rope(x_invalid_seq_zero)
         print(
-            "ERROR: Should have raised ValueError for out-of-bounds index."
+            "ERROR: Should have raised ValueError for out-of-bounds sequence length."
         )  # Should not reach here
     except ValueError as e:
-        print(f"Successfully caught expected error for index {invalid_pos_neg}: {e}")
+        print(
+            f"Successfully caught expected error for seq_len {invalid_seq_len_zero}: {e}"
+        )
     except Exception as e:
-        print(f"Caught unexpected error for index {invalid_pos_neg}: {e}")
+        print(f"Caught unexpected error for seq_len {invalid_seq_len_zero}: {e}")
+
+    # Bonus Test Case: KV Caching with explicit offset
+    print("\n--- Bonus Test Case: KV Caching with explicit offset ---")
+    try:
+        # Simulate generating a new token with KV cache offset
+        # After processing a sequence of length 10, next token would be at position 10
+        cache_offset = 10
+        new_token = torch.randn(batch_size, 1, d_model)  # Shape (batch, 1, dim)
+
+        # Call forward with explicit offset
+        new_token_rotated = rope(new_token, offset=cache_offset)
+
+        # Verify with manual application
+        new_token_manual = apply_rope_single_pos(
+            new_token.squeeze(1),
+            cos_cache_test[cache_offset],
+            sin_cache_test[cache_offset],
+        )
+
+        # Compare
+        new_token_diff = torch.sum(
+            torch.abs(new_token_rotated.squeeze(1) - new_token_manual)
+        ).item()
+        print(
+            f"Using offset={cache_offset} - Difference between batch and manual: {new_token_diff:.4e}"
+        )
+        assert torch.allclose(
+            new_token_rotated.squeeze(1), new_token_manual, atol=1e-5
+        ), "Offset RoPE doesn't match expected"
+        print(
+            f"Assertion Passed: RoPE with explicit offset {cache_offset} works correctly."
+        )
+    except Exception as e:
+        print(f"Error during KV caching test: {e}")
+        import traceback
+
+        traceback.print_exc()
