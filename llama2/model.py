@@ -125,6 +125,10 @@ class RoPE(nn.Module):
         x_even = x[..., 0::2]  # Shape: (batch, seq_len, ..., d/2)
         x_odd = x[..., 1::2]  # Shape: (batch, seq_len, ..., d/2)
 
+        # (for ↑) Or I could do this (same thing, just different syntax):
+        # x_even = x[:, :, :, 0::2]
+        # x_odd = x[:, :, :, 1::2]
+
         # Applying rotation to even and odd dimensions separately
         # The broadcast of cos/sin already handles the sequence dimension correct alignment
         x_rotated_even = x_even * cos - x_odd * sin
