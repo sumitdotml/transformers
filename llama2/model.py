@@ -184,6 +184,44 @@ class RoPE(nn.Module):
         return self.apply_rope(x, cos_values, sin_values)
 
 
+class RMSNorm(nn.Module):
+    """
+    Root Mean Square Layer Normalization
+
+    Args:
+        d_model (int): The dimension of the model.
+        eps (float): A small constant to avoid division by zero.
+
+    Returns:
+        torch.Tensor: The normalized tensor.
+
+    Formula (as per the paper https://arxiv.org/pdf/1910.07467, page 3):
+        ```
+        RMS(x) = sqrt(1/n * sum((x_i)**2 for i in range(1, n))) # where x_i is the i-th element of x
+        x_norm = (x / RMS(x)) * γ
+        where γ (gamma) = a learnable parameter, can be initialized to 1 (in case of torch tensor, can be initialized to torch.ones(d_model))
+        ```
+    """
+
+    def __init__(self, d_model: int, eps: float = 1e-5):
+        super().__init__()
+        self.d_model = d_model
+        self.eps = eps  # epsilon
+        self.scale = nn.Parameter(torch.ones(d_model))  # called gamma in the paper
+
+    def _RMS(self, x: torch.Tensor) -> torch.Tensor:
+        # sum has dim=-1 because I'm normalizing over the last dimension
+        # keepdim=True to keep the same shape as x
+        # self.eps is added to ensure the denominator is not zero
+        root_mean_square = torch.sqrt(
+            torch.sum(x**2, dim=-1, keepdim=True) / x.shape[-1] + self.eps
+        )
+        return root_mean_square
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (x / self._RMS(x)) * self.scale
+
+
 #######################################
 # TESTING (GENERATED WITH GEMINI 2.5) #
 #######################################
