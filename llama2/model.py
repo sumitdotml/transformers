@@ -179,7 +179,7 @@ class RoPE(nn.Module):
         cos_values = self.cos_cached[offset : offset + seq_len]  # Shape: (seq_len, d/2)
         sin_values = self.sin_cached[offset : offset + seq_len]  # Shape: (seq_len, d/2)
 
-        # Applying RoPE using the static helper method
+        # Aplying RoPE using the static helper method
         # The apply_rope method handles broadcasting cos/sin to match x's dimensions
         return self.apply_rope(x, cos_values, sin_values)
 
@@ -220,6 +220,95 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return (x / self._RMS(x)) * self.scale
+
+
+class GroupedMultiQueryAttention(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        max_seq_len: int,
+        rope_base: float,
+    ) -> None:
+        super().__init__()
+        assert (
+            hidden_dim % num_heads == 0
+        ), "hidden_dim (or d_model) should be divisible by num_heads"
+
+        assert (
+            num_heads % num_kv_heads == 0
+        ), "num_heads should be divisible by num_kv_heads since this is a GQA"
+
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = hidden_dim // num_heads
+        self.num_query_groups = num_heads // num_kv_heads
+
+        self.W_q = nn.Linear(
+            in_features=hidden_dim, out_features=hidden_dim, bias=False
+        )
+        self.W_k = nn.Linear(
+            in_features=hidden_dim,
+            out_features=num_kv_heads * self.head_dim,
+            bias=False,
+        )
+        self.W_v = nn.Linear(
+            in_features=hidden_dim,
+            out_features=num_kv_heads * self.head_dim,
+            bias=False,
+        )
+        self.W_o = nn.Linear(
+            in_features=hidden_dim, out_features=hidden_dim, bias=False
+        )
+        self.rope = RoPE(d_model=self.head_dim, max_seq_len=max_seq_len, base=rope_base)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        offset: int = 0,
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        batch, seq_len, hidden_dim = x.shape
+        q = self.W_q(x)  # [batch, seq_len, hidden_dim]
+        k = self.W_k(x)  # [batch, seq_len, num_kv_heads * head_dim]
+        v = self.W_v(x)  # [batch, seq_len, num_kv_heads * head_dim]
+
+        # [batch, seq_len, hidden_dim] -> [batch, seq_len, num_heads, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        q = q.view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # [batch, seq_len, num_kv_heads * head_dim] -> [batch, seq_len, num_kv_heads, head_dim] ->
+        # -> [batch, num_kv_heads, seq_len, head_dim]
+        k = k.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        q = self.rope(q, offset=offset)
+        k = self.rope(k, offset=offset)
+
+        # kv caching should come next, omitting for now
+
+        # since the num_heads in q is not the same as the num_kv_heads in k and v, I need to match them
+        # for instance, if num_heads = 8 and num_kv_heads = 4, I need to make num_kv_heads = 8 with the help
+        # of torch's interpolation.
+        k = k.repeat_interleave(
+            self.num_query_groups, dim=1
+        )  # [batch, num_kv_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        v = v.repeat_interleave(
+            self.num_query_groups, dim=1
+        )  # [batch, num_kv_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
+
+        attn_scores = (q @ torch.transpose(k, -1, -2)) / (self.head_dim**0.5)
+        attn_weight = torch.softmax(attn_scores, dim=-1)
+        output = attn_weight @ v
+
+        # [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, num_heads, head_dim]
+        output = output.transpose(1, 2).contiguous()
+
+        # [batch, seq_len, num_heads, head_dim] -> [batch, seq_len, hidden_dim]
+        output = output.view(batch, seq_len, self.hidden_dim)
+        output = self.W_o(output)
+        return output
 
 
 #######################################
@@ -276,7 +365,7 @@ if __name__ == "__main__":
         cos_cache_test = rope_single_pos.cos_cached.to(x_seq.device)
         sin_cache_test = rope_single_pos.sin_cached.to(x_seq.device)
 
-        # Since we are now using offset=0 as default in the forward method
+        # Since I am now using offset=0 as default in the forward method
         offset = 0  # Match the default in the forward method
         for i in range(seq_len):
             pos_i = (
