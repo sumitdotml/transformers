@@ -1,3 +1,4 @@
+import math
 from typing import Tuple, Optional, List, Union
 import torch
 import torch.nn as nn
@@ -269,46 +270,90 @@ class GroupedMultiQueryAttention(nn.Module):
         x: torch.Tensor,
         offset: int = 0,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> torch.Tensor:
-        batch, seq_len, hidden_dim = x.shape
-        q = self.W_q(x)  # [batch, seq_len, hidden_dim]
-        k = self.W_k(x)  # [batch, seq_len, num_kv_heads * head_dim]
-        v = self.W_v(x)  # [batch, seq_len, num_kv_heads * head_dim]
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        batch, seq_len, hidden_dim = x.shape  # [batch, seq_len_curr, hidden_dim]
+        q = self.W_q(x)  # [batch, seq_len_curr, hidden_dim]
+        k = self.W_k(x)  # [batch, seq_len_curr, num_kv_heads * head_dim]
+        v = self.W_v(x)  # [batch, seq_len_curr, num_kv_heads * head_dim]
 
-        # [batch, seq_len, hidden_dim] -> [batch, seq_len, num_heads, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        # [batch, seq_len_curr, hidden_dim] -> [batch, seq_len_curr, num_heads, head_dim] -> [batch, num_heads, seq_len_curr, head_dim]
         q = q.view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # [batch, seq_len, num_kv_heads * head_dim] -> [batch, seq_len, num_kv_heads, head_dim] ->
-        # -> [batch, num_kv_heads, seq_len, head_dim]
+        # [batch, seq_len_curr, num_kv_heads * head_dim] -> [batch, seq_len_curr, num_kv_heads, head_dim] ->
+        # -> [batch, num_kv_heads, seq_len_curr, head_dim]
         k = k.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        q = self.rope(q, offset=offset)
-        k = self.rope(k, offset=offset)
+        q = self.rope(q, offset=offset)  # [batch, num_heads, seq_len_curr, head_dim]
+        k = self.rope(k, offset=offset)  # [batch, num_kv_heads, seq_len_curr, head_dim]
 
         # kv caching should come next, omitting for now
+        cache_k, cache_v = (
+            past_key_value if past_key_value is not None else (None, None)
+        )
+        if cache_k is not None:
+            # concatenating along the sequence length dimension (dim=2)
+
+            # k shape before: [batch, num_kv_heads, seq_len_curr, head_dim]
+            # cache_k shape: [batch, num_kv_heads, seq_len_cache, head_dim]
+            k = torch.cat([cache_k, k], dim=2)
+
+            # v shape before: [batch, num_kv_heads, seq_len_curr, head_dim]
+            # cache_v shape: [batch, num_kv_heads, seq_len_cache, head_dim]
+            v = torch.cat([cache_v, v], dim=2)
+
+            # k, v shape after: [batch, num_kv_heads, seq_len_total, head_dim] (where seq_len_total = seq_len_curr + seq_len_cache)
+
+        # Tuple containing tensors of shape [batch, num_kv_heads, seq_len_total, head_dim]
+        current_key_value = (
+            k,
+            v,
+        )
 
         # since the num_heads in q is not the same as the num_kv_heads in k and v, I need to match them
         # for instance, if num_heads = 8 and num_kv_heads = 4, I need to make num_kv_heads = 8 with the help
         # of torch's interpolation.
-        k = k.repeat_interleave(
+        k_repeated = k.repeat_interleave(
             self.num_query_groups, dim=1
-        )  # [batch, num_kv_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
-        v = v.repeat_interleave(
+        )  # [batch, num_kv_heads, seq_len_total, head_dim] -> [batch, num_heads, seq_len_total, head_dim]
+        v_repeated = v.repeat_interleave(
             self.num_query_groups, dim=1
-        )  # [batch, num_kv_heads, seq_len, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        )  # [batch, num_kv_heads, seq_len_total, head_dim] -> [batch, num_heads, seq_len_total, head_dim]
 
-        attn_scores = (q @ torch.transpose(k, -1, -2)) / (self.head_dim**0.5)
+        #########################
+        # Attention Calculation #
+        #########################
+
+        # q shape: [batch, num_heads, seq_len_curr, head_dim]
+        # k_repeated transposed shape: [batch, num_heads, head_dim, seq_len_total]
+
+        # attn_scores shape: [batch, num_heads, seq_len_curr, seq_len_total]
+        attn_scores = (q @ torch.transpose(k_repeated, -1, -2)) / math.sqrt(
+            self.head_dim
+        )
+
+        # attn_weight shape: [batch, num_heads, seq_len_curr, seq_len_total]
         attn_weight = torch.softmax(attn_scores, dim=-1)
-        output = attn_weight @ v
 
-        # [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, num_heads, head_dim]
+        # v_repeated shape: [batch, num_heads, seq_len_total, head_dim]
+        # output shape: [batch, num_heads, seq_len_curr, head_dim]
+        output = attn_weight @ v_repeated
+
+        ##################
+        # Reshape Output #
+        ##################
+
+        # Input shape: [batch, num_heads, seq_len_curr, head_dim]
+        # Output shape: [batch, seq_len_curr, num_heads, head_dim]
         output = output.transpose(1, 2).contiguous()
 
-        # [batch, seq_len, num_heads, head_dim] -> [batch, seq_len, hidden_dim]
+        # [batch, seq_len_curr, num_heads, head_dim] -> [batch, seq_len_curr, hidden_dim]
         output = output.view(batch, seq_len, self.hidden_dim)
+
+        # [batch, seq_len_curr, hidden_dim] -> [batch, seq_len_curr, hidden_dim]
         output = self.W_o(output)
-        return output
+
+        return output, current_key_value
 
 
 #######################################
