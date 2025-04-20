@@ -287,7 +287,6 @@ class GroupedMultiQueryAttention(nn.Module):
         q = self.rope(q, offset=offset)  # [batch, num_heads, seq_len_curr, head_dim]
         k = self.rope(k, offset=offset)  # [batch, num_kv_heads, seq_len_curr, head_dim]
 
-        # kv caching should come next, omitting for now
         cache_k, cache_v = (
             past_key_value if past_key_value is not None else (None, None)
         )
@@ -296,13 +295,18 @@ class GroupedMultiQueryAttention(nn.Module):
 
             # k shape before: [batch, num_kv_heads, seq_len_curr, head_dim]
             # cache_k shape: [batch, num_kv_heads, seq_len_cache, head_dim]
-            k = torch.cat([cache_k, k], dim=2)
+            k = torch.cat(
+                [cache_k, k], dim=2
+            )  # dim = 2 means sequence length dimension
 
             # v shape before: [batch, num_kv_heads, seq_len_curr, head_dim]
             # cache_v shape: [batch, num_kv_heads, seq_len_cache, head_dim]
-            v = torch.cat([cache_v, v], dim=2)
+            v = torch.cat(
+                [cache_v, v], dim=2
+            )  # dim = 2 means sequence length dimension
 
-            # k, v shape after: [batch, num_kv_heads, seq_len_total, head_dim] (where seq_len_total = seq_len_curr + seq_len_cache)
+            # k, v shape after: [batch, num_kv_heads, seq_len_total, head_dim]
+            # (where seq_len_total = seq_len_curr + seq_len_cache)
 
         # Tuple containing tensors of shape [batch, num_kv_heads, seq_len_total, head_dim]
         current_key_value = (
@@ -353,6 +357,7 @@ class GroupedMultiQueryAttention(nn.Module):
         # [batch, seq_len_curr, hidden_dim] -> [batch, seq_len_curr, hidden_dim]
         output = self.W_o(output)
 
+        # this current_key_value will be passed back as past_key_value for the next generation step
         return output, current_key_value
 
 
