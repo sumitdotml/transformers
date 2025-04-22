@@ -2,6 +2,7 @@ import math
 from typing import Tuple, Optional, List, Union
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from config import CONFIG
 
 
@@ -359,6 +360,93 @@ class GroupedMultiQueryAttention(nn.Module):
 
         # this current_key_value will be passed back as past_key_value for the next generation step
         return output, current_key_value
+
+
+class DecoderBlock(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        ffn_dim: int,
+        max_seq_len: int,
+        rope_base: float,
+        norm_eps: float,
+    ) -> None:
+        super().__init__()
+
+        ##################################
+        ###### Attention Components ######
+        ##################################
+        self.attn_norm = RMSNorm(d_model=hidden_dim, eps=norm_eps)
+        self.attention = GroupedMultiQueryAttention(
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            max_seq_len=max_seq_len,
+            rope_base=rope_base,
+        )
+
+        #############################
+        ###### FFN Components #######
+        #############################
+        self.ffn_norm = RMSNorm(d_model=hidden_dim, eps=norm_eps)
+
+        # 3 nn.Linear layers for the SwiGLU FFN
+        self.w_gate = nn.Linear(
+            in_features=hidden_dim, out_features=ffn_dim, bias=False
+        )
+        self.w_up = nn.Linear(in_features=hidden_dim, out_features=ffn_dim, bias=False)
+        self.w_down = nn.Linear(
+            in_features=ffn_dim, out_features=hidden_dim, bias=False
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        offset: int = 0,
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+
+        ##################################
+        ######## Attention Block #########
+        ##################################
+
+        residual = x
+        normalized_x = self.attn_norm(x)
+
+        # GQA
+        attn_output, current_key_value = self.attention(
+            normalized_x, offset=offset, past_key_value=past_key_value
+        )
+
+        # ---------- Residual 1 ----------
+        h = residual + attn_output  # h here is also called the "hidden state"
+
+        ###################################
+        ####### FFN Block (SwiGLU) ########
+        ###################################
+
+        residual = h
+        normalized_h = self.ffn_norm(h)  # FFN pre-normalization
+
+        # two projections for SwiGLU
+        gate_projection = self.w_gate(normalized_h)  # Input to SiLU gate
+        up_projection = self.w_up(normalized_h)  # Content to be gated
+
+        # SiLU activation to the gate projection
+        activated_gate = F.silu(gate_projection)
+
+        # Element-wise multiplying gate and content projection (SwiGLU activation result)
+        gated_content = activated_gate * up_projection
+
+        # final down projection
+        ffn_output = self.w_down(gated_content)
+
+        # ---------- Residual 2 ----------
+        out = residual + ffn_output
+
+        return out, current_key_value
 
 
 #######################################
