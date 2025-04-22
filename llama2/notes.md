@@ -88,7 +88,7 @@ This tensor holds `num_kv_heads` different <b><a style="color: green;">Key</a></
 
 ### Why Concatenate Along dim=2 (i.e. the Sequence Length)?
 
-_A detailed code visualization of the cache concatenation and why it is done along `dim=2` is available in the [kv_cache_practice.ipynb](./kv_cache_practice.ipynb) file. I am a learner who understands things clearly only when I see them in action, so this code was really helpful for me._
+_A detailed code visualization of the cache concatenation and why it is done along `dim=2` is available in the [kv_cache_practice.ipynb](./practice_notebooks/kv_cache_practice.ipynb) file. I am a learner who understands things clearly only when I see them in action, so this code was really helpful for me._
 
 When we process the new token(s) at the current step (let's say `seq_len_curr` new tokens starting at `offset`), we calculate their <b><a style="color: green;">K</a></b> and <b><a style="color: yellow;">V</a></b> vectors (shape `[b, G, seq_len_curr, d]`).
 The cache `(cache_k, cache_v)` holds the <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> vectors for the previous `seq_len_cache` tokens (shape `[b, G, seq_len_cache, d]`).
