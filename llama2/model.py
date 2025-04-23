@@ -3,7 +3,6 @@ from typing import Tuple, Optional, List, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config import CONFIG
 
 
 class RoPE(nn.Module):
@@ -271,6 +270,7 @@ class GroupedMultiQueryAttention(nn.Module):
         x: torch.Tensor,
         offset: int = 0,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         batch, seq_len, hidden_dim = x.shape  # [batch, seq_len_curr, hidden_dim]
         q = self.W_q(x)  # [batch, seq_len_curr, hidden_dim]
@@ -336,6 +336,14 @@ class GroupedMultiQueryAttention(nn.Module):
         attn_scores = (q @ torch.transpose(k_repeated, -1, -2)) / math.sqrt(
             self.head_dim
         )
+
+        if attention_mask is not None:
+            # reshaping mask from [batch, seq_len_total] to [batch, 1, 1, seq_len_total]
+            # for proper broadcasting with attn_scores [batch, num_heads, seq_len_curr, seq_len_total]
+            if attention_mask.dim() == 2:
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
+            attn_scores = attn_scores.masked_fill(attention_mask == 0, float("-inf"))
 
         # attn_weight shape: [batch, num_heads, seq_len_curr, seq_len_total]
         attn_weight = torch.softmax(attn_scores, dim=-1)
@@ -449,233 +457,97 @@ class DecoderBlock(nn.Module):
         return out, current_key_value
 
 
-#######################################
-# TESTING (GENERATED WITH GEMINI 2.5) #
-#######################################
-if __name__ == "__main__":
-    config = CONFIG
+class Llama2(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_dim: int,
+        num_decoder_layers: int,
+        num_heads: int,
+        num_kv_heads: int,
+        ffn_dim: int,
+        max_seq_len: int,
+        rope_base: float,
+        norm_eps: float,
+    ):
+        super().__init__()
 
-    torch.manual_seed(0)
-    d_model = config["hidden_size"]
-    max_seq_len = config["max_position_embeddings"]
-    base = config["rope_theta"]
+        # Embedding layer
+        self.embedding = nn.Embedding(
+            num_embeddings=vocab_size, embedding_dim=hidden_dim
+        )
 
-    # Instantiate RoPE
-    try:
-        rope = RoPE(d_model=d_model, max_seq_len=max_seq_len, base=base)
-        print(f"Initialized RoPE with d_model={d_model}, max_seq_len={max_seq_len}")
-        print(f"Cache shape: cos={rope.cos_cached.shape}, sin={rope.sin_cached.shape}")
-    except Exception as e:
-        print(f"Error initializing RoPE: {e}")
-        exit()
+        # Stacking Decoder Blocks
+        self.decoder_blocks = nn.ModuleList(
+            [
+                DecoderBlock(
+                    hidden_dim=hidden_dim,
+                    num_heads=num_heads,
+                    num_kv_heads=num_kv_heads,
+                    ffn_dim=ffn_dim,
+                    max_seq_len=max_seq_len,
+                    rope_base=rope_base,
+                    norm_eps=norm_eps,
+                )
+                for _ in range(num_decoder_layers)
+            ]
+        )
 
-    # Test Case 1: Sequence Processing (Main test)
-    print("\n--- Test Case 1: Sequence Processing ---")
-    seq_len = 10
-    batch_size = 2
-    x_seq = torch.randn(batch_size, seq_len, d_model)
-    print(f"Input sequence shape: {x_seq.shape}")
-    try:
-        rotated_seq = rope(x_seq)  # Apply RoPE across the sequence
-        print(f"Rotated sequence shape: {rotated_seq.shape}")
+        # RMSNorm after the Decoder Stack
+        self.final_norm = RMSNorm(d_model=hidden_dim, eps=norm_eps)
 
-        # Verification: Apply RoPE manually position by position and compare
-        rotated_manual = torch.zeros_like(x_seq)
-        rope_single_pos = RoPE(
-            d_model=d_model, max_seq_len=max_seq_len, base=base
-        )  # Use original implementation for single pos check
+        # Final Linear layer, often referred to as LM Head (language model head)
+        self.lm_head = nn.Linear(
+            in_features=hidden_dim, out_features=vocab_size, bias=False
+        )
 
-        # Need the *original* apply_rope and forward that took position_index
-        # Let's redefine it here locally for the test comparison
-        @staticmethod
-        def apply_rope_single_pos(
-            x_pos: torch.Tensor, cos_pos: torch.Tensor, sin_pos: torch.Tensor
-        ) -> torch.Tensor:
-            x_even = x_pos[..., 0::2]
-            x_odd = x_pos[..., 1::2]
-            x_rotated_even = x_even * cos_pos - x_odd * sin_pos
-            x_rotated_odd = x_even * sin_pos + x_odd * cos_pos
-            x_rotated = torch.empty_like(x_pos)
-            x_rotated[..., 0::2] = x_rotated_even
-            x_rotated[..., 1::2] = x_rotated_odd
-            return x_rotated
+        # Weight tying
+        self.lm_head.weight = self.embedding.weight
 
-        cos_cache_test = rope_single_pos.cos_cached.to(x_seq.device)
-        sin_cache_test = rope_single_pos.sin_cached.to(x_seq.device)
+        # Max seq length storing if required
+        self.max_seq_len = max_seq_len
 
-        # Since I am now using offset=0 as default in the forward method
-        offset = 0  # Match the default in the forward method
-        for i in range(seq_len):
-            pos_i = (
-                offset + i
-            )  # Calculate position using offset (consistent with KV caching)
-            cos_pos_i = cos_cache_test[pos_i]  # Shape (d/2,)
-            sin_pos_i = sin_cache_test[pos_i]  # Shape (d/2,)
-            rotated_manual[:, i, :] = apply_rope_single_pos(
-                x_seq[:, i, :], cos_pos_i, sin_pos_i
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        offset: int = 0,
+        past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[Tuple[torch.Tensor, torch.Tensor]]]]:
+
+        ########### 1. Embedding #############
+
+        # input_ids [batch, seq_len] -> x (i.e., input embeddings) [batch, seq_len, hidden_dim]
+        x = self.embedding(input_ids)
+
+        # initializing cache storage
+        is_prompt_processing = past_key_values is None
+        new_caches = [] if not is_prompt_processing else None
+
+        ######### 2. Decoder Blocks #############
+
+        # looping through decoder blocks
+        for i, decoder_block in enumerate(self.decoder_blocks):
+
+            # getting the cache for the current layer
+            layer_past_kv_cache = (
+                past_key_values[i] if not is_prompt_processing else None
             )
 
-        difference = torch.sum(torch.abs(rotated_seq - rotated_manual)).item()
-        print(
-            f"Sum of absolute difference between batch RoPE and manual RoPE: {difference:.4e}"
-        )
-        assert torch.allclose(
-            rotated_seq, rotated_manual, atol=1e-5
-        ), "Batch RoPE output does not match manual RoPE."
-        print("Assertion Passed: Batch RoPE matches manual RoPE.")
+            # passing input, offset, and layer-specific cache through the block
+            x, current_kv_cache = decoder_block(
+                x, offset=offset, past_key_value=layer_past_kv_cache
+            )
 
-        # Print shapes to debug
-        print(f"Testing shapes - x[0,0,:10]: {x_seq[0,0,:10].shape}")
-        print(f"Single position cos shape: {cos_cache_test[0].shape}")
-        print(f"Position range used: {offset} to {offset+seq_len-1}")
+            # storing the updated cache for this layer if generating
+            if not is_prompt_processing:
+                new_caches.append(current_kv_cache)
 
-    except Exception as e:
-        print(f"Error processing sequence: {e}")
-        import traceback
+        returned_cache = tuple(new_caches) if not is_prompt_processing else None
 
-        traceback.print_exc()
+        ###### 3. Final Normalization ########
+        x = self.final_norm(x)
 
-    # Test Case 2: First Token Behavior (At position 0)
-    print("\n--- Test Case 2: First Token Behavior (At position 0) ---")
-    try:
-        first_token_input = x_seq[:, 0:1, :]  # Shape (batch, 1, dim)
-        first_token_rotated = rope(first_token_input)  # Apply RoPE to seq length 1
-        difference_pos0 = torch.sum(
-            torch.abs(first_token_input - first_token_rotated)
-        ).item()
+        ###### 4. Final Linear layer #######,
+        logits = self.lm_head(x)  # [batch, seq_len, vocab_size]
 
-        # With offset=0 (default), a sequence of length 1 should use position 0
-        # Which should be close to identity operation
-        print(f"Applying RoPE to sequence of length 1 (position 0, default offset)")
-        print(f"Sum of difference between input and output: {difference_pos0:.4e}")
-
-        # Verify with manual application to the correct position
-        actual_pos = 0  # Match default offset
-        first_token_manual = apply_rope_single_pos(
-            first_token_input.squeeze(1),  # Remove seq_len dimension for single token
-            cos_cache_test[actual_pos],
-            sin_cache_test[actual_pos],
-        )
-
-        # Compare batch implementation with manual application
-        manual_diff = torch.sum(
-            torch.abs(first_token_rotated.squeeze(1) - first_token_manual)
-        ).item()
-        print(f"Difference between batch and manual application: {manual_diff:.4e}")
-        assert torch.allclose(
-            first_token_rotated.squeeze(1), first_token_manual, atol=1e-5
-        ), "First token rotation doesn't match expected"
-        print("Assertion Passed: First token rotation is correct at position 0.")
-
-        # Also verify identity property at position 0
-        assert torch.allclose(
-            first_token_input.squeeze(1), first_token_rotated.squeeze(1), atol=1e-6
-        ), "RoPE at pos 0 should be close to identity"
-        print("Assertion Passed: RoPE at pos 0 is close to identity.")
-    except Exception as e:
-        print(f"Error during position 0 check: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # Test Case 3: Multi-dimensional Input (e.g., with Heads)
-    print("\n--- Test Case 3: Multi-dimensional Input (e.g., with Heads) ---")
-    num_heads = 4
-    head_dim = d_model // num_heads  # Assuming d_model is divisible by num_heads
-    # Reshape x_seq to simulate head dimension: (batch, seq_len, num_heads, head_dim)
-    # NOTE: This assumes RoPE is applied *after* splitting into heads.
-    # If RoPE is applied *before* splitting, the input shape would be (batch, seq_len, d_model) as in Case 1.
-    # Let's test the case where RoPE is applied *per head* on head_dim
-    # We need a RoPE instance for head_dim
-    rope_per_head = RoPE(d_model=head_dim, max_seq_len=max_seq_len, base=base)
-    x_multi_dim = torch.randn(batch_size, seq_len, num_heads, head_dim)
-    print(f"Input shape (per-head RoPE): {x_multi_dim.shape}")
-    try:
-        # Apply RoPE across seq_len, acting on the last dim (head_dim)
-        rotated_multi_dim = rope_per_head(x_multi_dim)
-        print(f"Rotated output shape: {rotated_multi_dim.shape}")
-        print(f"Successfully applied RoPE to multi-dimensional input.")
-        # Add verification similar to Test Case 1 if needed
-    except Exception as e:
-        print(f"Error processing multi-dimensional input (per-head): {e}")
-        import traceback
-
-        traceback.print_exc()
-
-    # Test Case 4: Boundary Checks (Sequence Length)
-    print("\n--- Test Case 4: Boundary Checks (Sequence Length) ---")
-    try:
-        # Test max valid sequence length
-        print(f"Testing max sequence length: {max_seq_len}")
-        x_max_seq = torch.randn(batch_size, max_seq_len, d_model)
-        _ = rope(x_max_seq)
-        print("Max sequence length test successful.")
-    except Exception as e:
-        print(f"Error testing max sequence length: {e}")
-
-    try:
-        # Test invalid sequence length (too high)
-        invalid_seq_len = max_seq_len + 1
-        print(f"Testing invalid sequence length: {invalid_seq_len}")
-        x_invalid_seq = torch.randn(batch_size, invalid_seq_len, d_model)
-        _ = rope(x_invalid_seq)
-        print(
-            "ERROR: Should have raised ValueError for out-of-bounds sequence length."
-        )  # Should not reach here
-    except ValueError as e:
-        print(f"Successfully caught expected error for seq_len {invalid_seq_len}: {e}")
-    except Exception as e:
-        print(f"Caught unexpected error for seq_len {invalid_seq_len}: {e}")
-
-    try:
-        # Test invalid sequence length (zero)
-        invalid_seq_len_zero = 0
-        print(f"Testing invalid sequence length: {invalid_seq_len_zero}")
-        x_invalid_seq_zero = torch.randn(batch_size, invalid_seq_len_zero, d_model)
-        _ = rope(x_invalid_seq_zero)
-        print(
-            "ERROR: Should have raised ValueError for out-of-bounds sequence length."
-        )  # Should not reach here
-    except ValueError as e:
-        print(
-            f"Successfully caught expected error for seq_len {invalid_seq_len_zero}: {e}"
-        )
-    except Exception as e:
-        print(f"Caught unexpected error for seq_len {invalid_seq_len_zero}: {e}")
-
-    # Bonus Test Case: KV Caching with explicit offset
-    print("\n--- Bonus Test Case: KV Caching with explicit offset ---")
-    try:
-        # Simulate generating a new token with KV cache offset
-        # After processing a sequence of length 10, next token would be at position 10
-        cache_offset = 10
-        new_token = torch.randn(batch_size, 1, d_model)  # Shape (batch, 1, dim)
-
-        # Call forward with explicit offset
-        new_token_rotated = rope(new_token, offset=cache_offset)
-
-        # Verify with manual application
-        new_token_manual = apply_rope_single_pos(
-            new_token.squeeze(1),
-            cos_cache_test[cache_offset],
-            sin_cache_test[cache_offset],
-        )
-
-        # Compare
-        new_token_diff = torch.sum(
-            torch.abs(new_token_rotated.squeeze(1) - new_token_manual)
-        ).item()
-        print(
-            f"Using offset={cache_offset} - Difference between batch and manual: {new_token_diff:.4e}"
-        )
-        assert torch.allclose(
-            new_token_rotated.squeeze(1), new_token_manual, atol=1e-5
-        ), "Offset RoPE doesn't match expected"
-        print(
-            f"Assertion Passed: RoPE with explicit offset {cache_offset} works correctly."
-        )
-    except Exception as e:
-        print(f"Error during KV caching test: {e}")
-        import traceback
-
-        traceback.print_exc()
+        return logits, returned_cache
