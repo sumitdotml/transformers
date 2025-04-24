@@ -138,3 +138,105 @@ This distinction is why `K_p` and `V_p` make sense (properties tied to a fixed l
 
 #
 
+## Prompt Processing vs. Autoregressive Generation
+
+In the `forward` method of the `Llama2` class, just after the embedding layer and before the final norm, there is this following code snippet:
+
+```python
+# .... previous code ....
+
+# 1. Check if we're processing a prompt
+is_prompt_processing = past_key_values is None
+
+# 2. Initialize cache storage
+new_caches = [] if not is_prompt_processing else None
+
+# looping through decoder blocks
+        for i, decoder_block in enumerate(self.decoder_blocks):
+
+            # getting the cache for the current layer
+            layer_past_kv_cache = (
+                past_key_values[i] if not is_prompt_processing else None
+            )
+
+            # passing input, offset, and layer-specific cache through the block
+            x, current_kv_cache = decoder_block(
+                x, offset=offset, past_key_value=layer_past_kv_cache
+            )
+
+            # storing the updated cache for this layer if generating
+            if not is_prompt_processing:
+                new_caches.append(current_kv_cache)
+
+returned_cache = tuple(new_caches) if not is_prompt_processing else None
+
+# ... rest of the code ...
+```
+
+A transformer like Llama 2 generates text. This happens in two main stages:
+
+<b>Stage 1: Processing the Input (Prompt)</b>: The model first reads and understands the initial text provided by the user (the prompt).
+
+<b>Stage 2: Generating Subsequent Text (Autoregression)</b>: After processing the prompt, the model generates new words (tokens) one after another, where each new word depends on the prompt and all the words generated so far.
+
+<b>Why the distinction?</b>
+
+These two stages are computationally different.
+- Processing the prompt involves calculating attention across all words in the prompt simultaneously.
+- Generating the next word only requires processing the single most recently generated word, but it needs to consider the context of everything that came before (the prompt + previously generated words).
+
+<b>How is this "context" efficiently managed?</b>
+
+Instead of re-calculating attention over the entire sequence (prompt + generated words) every single time a new word is generated (which would be very slow), transformers use a mechanism called a <b><a style="color: skyblue;">KV Cache</a></b>.
+
+- During prompt processing (Stage 1), the model calculates internal states (called <b><a style="color: green;">Key</a></b> 'K' and <b><a style="color: yellow;">Value</a></b> 'V' tensors) for each layer's attention mechanism based on the prompt. These <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> tensors represent the processed context of the prompt.
+- This calculated <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> context is stored (cached). We see this cache referred to as `past_key_values` in the code.
+- During generation (Stage 2), when processing the next single word, the model calculates <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> only for that new word. It then combines (concatenates) these new <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> values with the cached <b><a style="color: green;">K</a></b>/<b><a style="color: yellow;">V</a></b> values from all previous steps. This allows the attention mechanism to "see" the full context without reprocessing everything.
+
+
+### Example Walkthrough:
+
+Let's take the following prompt:
+
+"I wake up to study because a fresh"
+
+**Stage 1: Prompt Processing**
+
+- Input: The model receives the entire prompt: `["I", "wake", "up", "to", "study", "because", "a", "fresh"]` (tokenized)
+- Status: `past_key_values = None → is_prompt_processing = True`
+- Process:
+  - The model embeds all 8 tokens at once: `x = self.embedding(input_ids)`
+  - For each decoder_block:
+    - Since `is_prompt_processing` is `True`, `layer_past_kv_cache = None`
+    - The block processes all 8 tokens at once with offset = 0
+    - For every attention layer, it computes Q, K, V for all tokens
+    - RoPE applies positional encoding for positions 0-7
+    - All tokens attend to previous tokens (causal attention mask)
+    - Each layer returns its current_kv_cache which gets stored in `new_caches`
+- The model returns:
+  - logits for all 8 tokens (predictions of what comes next after each)
+  - `returned_cache = tuple(new_caches) for all layers`
+
+**Stage 2: Autoregressive Generation (for the next word)**
+
+- Input: Just the single new token we're trying to predict (empty at first)
+- Status: `past_key_values = returned_cache from Stage 1 → is_prompt_processing = False`
+- Process:
+  - Model processes this single token (likely using a sampling method on the last position's logits from Stage 1)
+  - For each decoder_block:
+    - Since `is_prompt_processing` is `False`, `layer_past_kv_cache = past_key_values[i]`
+    - The block processes only the new token, but with offset = 8 (length of prompt)
+    - For every attention layer:
+      - It computes Q, K, V only for the new token
+      - It concatenates K, V with the cached K, V from `layer_past_kv_cache`
+      - RoPE applies positional encoding for position 8
+      - The new token attends to all previous tokens (0-7) using the cache
+      - Each layer updates its cache and returns current_kv_cache
+- The model returns:
+  - logits for the new token (prediction for next word)
+  - Updated `returned_cache` now containing information for positions 0-8
+
+Let's say the model predicts "start" after "fresh". If we wanted to generate another token, we'd repeat Stage 2, but with offset = 9 and the updated cache, allowing that next token to attend to all previous positions (0-8).
+
+The key efficiency comes from only having to process one new token at a time during generation, while maintaining full attention to all previous tokens through the KV cache.
+

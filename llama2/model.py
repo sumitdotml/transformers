@@ -521,7 +521,14 @@ class Llama2(nn.Module):
 
         # initializing cache storage
         is_prompt_processing = past_key_values is None
-        new_caches = [] if not is_prompt_processing else None
+
+        """
+        initializing cache storage irrespective of prompt processing or autoregressive generation
+        earlier, I was using `new_caches = [] if not is_prompt_processing else None`
+        but this is incorrect since `None` is not appendable
+        so, I instead need to initialize `new_caches = []`
+        """
+        new_caches = []
 
         ######### 2. Decoder Blocks #############
 
@@ -538,11 +545,10 @@ class Llama2(nn.Module):
                 x, offset=offset, past_key_value=layer_past_kv_cache
             )
 
-            # storing the updated cache for this layer if generating
-            if not is_prompt_processing:
-                new_caches.append(current_kv_cache)
+            # storing the updated cache irrespective of prompt processing or autoregressive generation
+            new_caches.append(current_kv_cache)
 
-        returned_cache = tuple(new_caches) if not is_prompt_processing else None
+        returned_cache = tuple(new_caches)
 
         ###### 3. Final Normalization ########
         x = self.final_norm(x)
