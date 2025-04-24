@@ -7,6 +7,7 @@ My attempt at implementing LLaMA2.
 - [Key Formulas and Concepts](#Key-Formulas-and-Concepts)
   - [Rotary Position Embeddings (RoPE)](#RoPE)
   - [RoPE Exercises](#RoPE-Exercises)
+- [Notes on caching, prompt processing, and generation logic](./notes.md)
 - [References](#References)
   - [Blogs](#Blogs)
   - [Papers](#Papers)

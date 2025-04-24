@@ -182,4 +182,8 @@ End of Block: The output `x` from step D.1 is the final output of this Transform
 
 ---
 
-<a href="./README.md">Go Back to README</a>
+
+<div style="text-align: center;">
+<a style="font-weight: bold;" href="./README.md">Back to README</a>
+</div>
+
