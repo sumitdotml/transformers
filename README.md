@@ -14,9 +14,9 @@ __Notations__
 
 | Model | Organization | Status |
 |-------|-------------|---------|
-| [GPT-2](./gpt2/README.md) | OpenAI | ✅ |
-| [LLaMA2](./llama2/README.md) | Meta | ✅ |
-| LLaMA3 | Meta | ❌ |
+| [GPT-2](./gpt2) | OpenAI | ✅ |
+| [LLaMA2](./llama2) | Meta | ✅ |
+| [LLaMA3](./llama3) | Meta | ⌛️ |
 | ViT | Google | ❌ |
 | BERT | Google | ❌ |
 | T5 | Google | ❌ |
