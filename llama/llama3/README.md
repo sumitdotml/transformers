@@ -2,7 +2,7 @@
 
 It turns out that the LLaMA3 architecture is almost identical to that of LLaMA2. The only difference is the use of a new tokenizer called Tiktoken. lol
 
-Idk whether I'll rewrite this whole architecture code again. Maybe I'll focus more on the inference part using my LlaMA2 implementation code and use it to load the LLaMA3 weights on Hugging Face.
+Idk whether I'll rewrite this whole architecture code again. Maybe I'll focus more on the inference part using my LlaMA2 implementation code and use it to load the LLaMA3 weights on Hugging Face. But I'll do that later. If you want to see the architecture code, you can check out [LLaMA2](../llama2) (these two are the same).
 
 ## Resources
 

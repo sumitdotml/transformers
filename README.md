@@ -15,12 +15,11 @@ __Notations__
 | Model | Organization | Status |
 |-------|-------------|---------|
 | [GPT-2](./gpt2) | OpenAI | ✅ |
-| [LLaMA2](./llama2) | Meta | ✅ |
-| [LLaMA3](./llama3) | Meta | ⌛️ |
+| [LLaMA2 / LLaMA3](./llama) | Meta | ✅ |
 | ViT | Google | ❌ |
 | BERT | Google | ❌ |
 | T5 | Google | ❌ |
-| Mistral-7B-v0.1 | Mistral AI | ❌ |
+| Mistral-7B-v0.1 | Mistral AI | ⏳ |
 | Mistral-7B-v0.2 | Mistral AI | ❌ |
 | DeepSeek-V2 | DeepSeek | ❌ |
 | DeepSeek-v3 | DeepSeek | ❌ |
