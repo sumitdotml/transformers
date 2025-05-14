@@ -1,0 +1,3 @@
+"""
+Neural network project package.
+"""
