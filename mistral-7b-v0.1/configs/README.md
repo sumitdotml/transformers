@@ -1,4 +1,11 @@
-# Neural Network Project Configuration Guide
+# Neural Network Project Configuration
+
+
+>[!IMPORTANT]
+> I prepared the configs for Mistral-7B-v0.1 in the default.json file from the paper as well as the [official Mistral test generate file](https://github.com/mistralai/mistral-inference/blob/main/tests/test_generate.py).
+
+
+<!-- Guide below is from https://github.com/sumitdotml/nn-project-template  -->
 
 This guide explains how to use and create configuration files for your neural network projects based on this template.
 

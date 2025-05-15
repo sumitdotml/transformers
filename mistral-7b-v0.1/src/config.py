@@ -6,32 +6,7 @@ import os
 import json
 from typing import Dict, Any
 
-# Define a dictionary for hardcoded fallback default values
-# These are used ONLY if configs/default.json is missing or unparsable.
-_FALLBACK_DEFAULTS = {
-    "model_type": "transformer",
-    "hidden_dim": 512,
-    "vocab_size": 30000,
-    "output_dim": 10,
-    "num_encoder_layers": 6,
-    "num_decoder_layers": 6,
-    "num_attention_heads": 8,
-    "ff_dim": 2048,
-    "dropout": 0.1,
-    "attention_dropout": 0.1,
-    "activation_function": "gelu",
-    "layer_norm_eps": 1e-12,
-    "max_position_embeddings": 512,
-    "batch_size": 32,
-    "learning_rate": 5e-5,
-    "weight_decay": 0.01,
-    "adam_beta1": 0.9,
-    "adam_beta2": 0.999,
-    "adam_epsilon": 1e-8,
-    "warmup_steps": 10000,
-    "epochs": 10,
-    "optimizer": "adamw",
-}
+_FALLBACK_DEFAULTS = {}
 
 
 class ModelConfig:
@@ -57,7 +32,6 @@ class ModelConfig:
     def _load_system_defaults(self):
         """
         Loads default configuration values for the instance.
-        Priority: configs/default.json > hardcoded _FALLBACK_DEFAULTS.
         """
         default_config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
