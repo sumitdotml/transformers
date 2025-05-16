@@ -1,2 +1,0 @@
-class RoPE:
-    pass

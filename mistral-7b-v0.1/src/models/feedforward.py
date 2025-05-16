@@ -1,2 +1,0 @@
-class FeedForward:
-    pass
