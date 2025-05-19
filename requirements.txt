@@ -2,3 +2,4 @@ torch
 numpy
 ipykernel
 transformers
+matplotlib
