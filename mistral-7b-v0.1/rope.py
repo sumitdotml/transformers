@@ -1,6 +1,7 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-from typing import Tuple
 
 
 class RoPE(nn.Module):
@@ -29,7 +30,8 @@ class RoPE(nn.Module):
         """
         super().__init__()
         if d_model % 2 != 0:
-            raise ValueError(f"Feature dimension {d_model} must be even for RoPE.")
+            raise ValueError(f"Feature dimension {
+                             d_model} must be even for RoPE.")
         self.d_model = d_model
         self.max_seq_len = max_seq_len
         self.base = base
@@ -61,8 +63,10 @@ class RoPE(nn.Module):
         d_half = d_model // 2
 
         # inverse frequencies: theta_i = 1.0 / (base^(2i / d_model)) for i in [0, d_half-1]
-        theta_indices = torch.arange(0, d_half, dtype=torch.float32, device=device)
-        theta = 1.0 / (base ** ((2 * theta_indices) / d_model))  # Shape: (d_half,)
+        theta_indices = torch.arange(
+            0, d_half, dtype=torch.float32, device=device)
+        # Shape: (d_half,)
+        theta = 1.0 / (base ** ((2 * theta_indices) / d_model))
 
         # positions m = [0, ..., max_seq_len-1]
         position_indices = torch.arange(
@@ -100,7 +104,8 @@ class RoPE(nn.Module):
         # ensuring positions are in bounds
         if offset < 0 or offset + seq_len > self.max_seq_len:
             raise ValueError(
-                f"Positions {offset}:{offset+seq_len} out of bounds for max_seq_len {self.max_seq_len}"
+                f"Positions {offset}:{
+                    offset+seq_len} out of bounds for max_seq_len {self.max_seq_len}"
             )
 
         # moving cache to correct device if needed
@@ -109,8 +114,8 @@ class RoPE(nn.Module):
             self.sin_cached = self.sin_cached.to(x.device)
 
         # getting relevant position encodings
-        cos = self.cos_cached[offset : offset + seq_len]  # (seq_len, d_half)
-        sin = self.sin_cached[offset : offset + seq_len]  # (seq_len, d_half)
+        cos = self.cos_cached[offset: offset + seq_len]  # (seq_len, d_half)
+        sin = self.sin_cached[offset: offset + seq_len]  # (seq_len, d_half)
 
         # creating appropriate view for broadcasting
         # for x with shape [batch, seq_len, ...], we need [1, seq_len, 1, ..., d_half]

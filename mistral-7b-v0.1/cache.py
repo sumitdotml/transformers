@@ -1,6 +1,7 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-from typing import Tuple
 
 
 class RollingBufferCache(nn.Module):
@@ -82,7 +83,8 @@ class RollingBufferCache(nn.Module):
         batch, num_heads, seq_len, head_dim = k.shape
 
         # Initializing the cache if needed
-        self._ensure_cache_initialized(batch, num_heads, head_dim, k.dtype, k.device)
+        self._ensure_cache_initialized(
+            batch, num_heads, head_dim, k.dtype, k.device)
 
         # Calculating the indices for the circular buffer update
         # The positions being written are [current_seq_len - seq_len, ..., current_seq_len - 1]
@@ -104,7 +106,8 @@ class RollingBufferCache(nn.Module):
             # Calculating the absolute positions of tokens in the sliding window
             # These are the last 'window_size' tokens: [current_seq_len - window_size, ..., current_seq_len - 1]
             start_pos = current_seq_len - window_size
-            window_positions = torch.arange(start_pos, current_seq_len, device=k.device)
+            window_positions = torch.arange(
+                start_pos, current_seq_len, device=k.device)
 
             # Mapping the absolute positions to the physical indices in the circular buffer
             physical_indices = window_positions % self.buffer_size
