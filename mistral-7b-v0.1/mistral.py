@@ -75,7 +75,6 @@ class Mistral(nn.Module):
             logits: Output logits [batch_size, seq_len, vocab_size]
             new_kv_cache: Updated key-value cache for incremental decoding
         """
-        batch_size, seq_len = input_ids.shape
 
         x = self.input_embedding(input_ids)
 
